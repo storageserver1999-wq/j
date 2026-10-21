@@ -142,6 +142,19 @@ button:focus-visible, input:focus-visible { outline: 1px solid #d0d0d0; outline-
 .scene-explorer-actions .insert-button, .scene-explorer-actions .world-insert-button { height: 25px; min-width: 0; padding: 0 7px; border: 1px solid #3d3d3d; border-radius: 0; font-size: 10px; }
 .world-insert-menu { left: auto; right: 0; }
 .skybox-face-section { display: grid; grid-template-columns: 1fr; gap: 7px; padding: 9px; border: 1px solid #3b3b3b; background: #252525; }
+.skybox-dimensions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.skybox-dimensions[hidden] { display: none; }
+.skybox-dimensions .property-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; color: #aaa; font-size: 10px; }
+.skybox-dimensions input { width: 100%; min-width: 0; padding: 5px; border: 1px solid #414141; border-radius: 0; background: #191919; color: #eee; font: inherit; }
+.skybox-image-settings { display: flex; flex-direction: column; gap: 7px; }
+.skybox-image-preview { width: 100%; height: 68px; object-fit: contain; border: 1px solid #393939; background: #181818; }
+.skybox-image-preview[hidden] { display: none; }
+.skybox-face-controls { display: flex; align-items: center; gap: 6px; }
+.skybox-face-controls .skybox-image-field { flex: 1; min-width: 0; }
+.skybox-face-section .skybox-face-color[hidden] { display: none; }
+.skybox-image-settings .property-field input[type="file"] { min-width: 0; width: 100%; color: #ccc; font-size: 10px; }
+.skybox-all-sides-image { margin-top: 8px; }
+.skybox-sphere-image { margin-top: 4px; }
 .skybox-atlas-section { display: flex; flex-direction: column; gap: 7px; padding: 9px; border: 1px solid #3b3b3b; background: #252525; }
 .skybox-atlas-section > strong { color: #ddd; font-size: 11px; font-weight: 600; }
 .skybox-atlas-section .property-field { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; }

@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { drawColorWheel, hsvToRgb, rgbToHsv } from './color-utils';
 import { computeGeometryNormals, createTriangleGeometry, shapeDefinitions } from './geometry';
+import { clearWorldSkybox, createWorldSkybox, createWorldSkyboxProperties, isWorldSkybox } from './world-skybox';
+import { createDisplayModeController, type ObjectDisplayMode } from './display-modes';
 import { MeshBasicNodeMaterial, WebGPURenderer } from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -519,12 +521,24 @@ const hierarchyRows = new WeakMap<THREE.Mesh, HTMLDivElement>();
 const expandedGroups = new WeakSet<THREE.Mesh>();
 const groupPivotByMesh = new WeakMap<THREE.Mesh, THREE.Group>();
 const objectParentByMesh = new WeakMap<THREE.Mesh, THREE.Mesh>();
+const displayModeController = createDisplayModeController({
+  objects,
+  isDisplayable: (mesh) => objectShapes.has(mesh),
+  buttons: displayModeButtons,
+  showAllWireframeButton: contextShowAllWireframeButton,
+  showAllFacesButton: contextShowAllFacesButton,
+  getSelectedObject: () => selectedObject,
+});
+const {
+  objectDisplayModes,
+  getOriginalMaterialVisibility,
+  setObjectDisplayMode,
+  showAllObjectsDisplayMode,
+  updateShowAllDisplayModeMenuLabels,
+  updateDisplayModeButtons,
+} = displayModeController;
 const smoothShadingByMesh = new WeakMap<THREE.Mesh, boolean>();
 const lightDirectionIndicators = new WeakMap<THREE.Mesh, THREE.ArrowHelper>();
-type ObjectDisplayMode = 'wireframe' | 'faces';
-const objectDisplayModes = new WeakMap<THREE.Mesh, ObjectDisplayMode>();
-const displayOverlayByMesh = new WeakMap<THREE.Mesh, THREE.Group>();
-const originalMaterialVisibility = new WeakMap<THREE.Mesh, boolean[]>();
 type EditableLight = THREE.PointLight | THREE.SpotLight | THREE.DirectionalLight;
 const sceneLights = new WeakMap<THREE.Mesh, EditableLight>();
 interface SunSettings {
@@ -535,7 +549,6 @@ interface SunSettings {
   glow: THREE.Sprite;
 }
 const sunSettings = new WeakMap<THREE.Mesh, SunSettings>();
-const worldSkyboxes = new WeakSet<THREE.Mesh>();
 let worldSkybox: THREE.Mesh | null = null;
 type MaterialPreset = 'Rubber' | 'Concrete' | 'Glass';
 const objectMaterialPresets = new WeakMap<THREE.Mesh, MaterialPreset>();
@@ -553,7 +566,7 @@ function getChildMeshes(mesh: THREE.Mesh): THREE.Mesh[] {
 }
 
 function isGroupableMesh(mesh: THREE.Mesh): boolean {
-  return objectShapes.has(mesh) && !worldSkyboxes.has(mesh);
+  return objectShapes.has(mesh) && !isWorldSkybox(mesh);
 }
 
 function getMeshTransformTarget(mesh: THREE.Mesh, mode = transformMode): THREE.Object3D {
@@ -737,129 +750,6 @@ function modelChildMeshes(parent: THREE.Mesh) {
     pieces.forEach((piece) => piece.dispose());
     addDebugEntry(error instanceof Error ? error.message : String(error), 'Scene Explorer');
   }
-}
-
-function getMeshMaterials(mesh: THREE.Mesh): THREE.Material[] {
-  return Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-}
-
-function clearDisplayOverlay(mesh: THREE.Mesh) {
-  const overlay = displayOverlayByMesh.get(mesh);
-  if (!overlay) return;
-  overlay.removeFromParent();
-  overlay.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) return;
-    getMeshMaterials(child).forEach((material) => material.dispose());
-    if (child.userData.displayOverlayOwnsGeometry === true) child.geometry.dispose();
-  });
-  displayOverlayByMesh.delete(mesh);
-}
-
-function createOffsetWireframeGeometry(geometry: THREE.BufferGeometry) {
-  const wireframeGeometry = geometry.clone();
-  const positions = wireframeGeometry.getAttribute('position');
-  const normals = wireframeGeometry.getAttribute('normal');
-  if (!(positions instanceof THREE.BufferAttribute) || !(normals instanceof THREE.BufferAttribute)) {
-    wireframeGeometry.dispose();
-    throw new Error('Wireframe display requires editable geometry positions and normals.');
-  }
-  wireframeGeometry.computeBoundingBox();
-  const offset = Math.max(
-    (wireframeGeometry.boundingBox?.getSize(new THREE.Vector3()).length() ?? 0) * 0.002,
-    1e-5,
-  );
-  const point = new THREE.Vector3();
-  const normal = new THREE.Vector3();
-  for (let index = 0; index < positions.count; index++) {
-    point.fromBufferAttribute(positions, index);
-    normal.fromBufferAttribute(normals, index);
-    if (normal.lengthSq() > 0) point.addScaledVector(normal.normalize(), offset);
-    positions.setXYZ(index, point.x, point.y, point.z);
-  }
-  positions.needsUpdate = true;
-  wireframeGeometry.computeBoundingBox();
-  wireframeGeometry.computeBoundingSphere();
-  return wireframeGeometry;
-}
-
-function setObjectDisplayMode(mesh: THREE.Mesh, mode: ObjectDisplayMode | null) {
-  if (!objectShapes.has(mesh)) return;
-  clearDisplayOverlay(mesh);
-
-  const materials = getMeshMaterials(mesh);
-  const originalVisibility = originalMaterialVisibility.get(mesh) ?? materials.map((material) => material.visible);
-  materials.forEach((material, index) => {
-    material.visible = mode === 'wireframe' ? false : (originalVisibility[index] ?? true);
-  });
-
-  if (!mode) {
-    objectDisplayModes.delete(mesh);
-    originalMaterialVisibility.delete(mesh);
-    updateDisplayModeButtons();
-    return;
-  }
-
-  if (!originalMaterialVisibility.has(mesh)) originalMaterialVisibility.set(mesh, originalVisibility);
-  objectDisplayModes.set(mesh, mode);
-  const overlay = new THREE.Group();
-  overlay.name = `Display overlay (${mode})`;
-  if (mode === 'wireframe') {
-    const depthOccluder = new THREE.Mesh(
-      mesh.geometry,
-      new THREE.MeshBasicMaterial({
-        colorWrite: false,
-        depthTest: true,
-        depthWrite: true,
-        side: THREE.FrontSide,
-      }),
-    );
-    depthOccluder.renderOrder = 0;
-    depthOccluder.frustumCulled = mesh.frustumCulled;
-    overlay.add(depthOccluder);
-  }
-  const wireframe = new THREE.Mesh(
-    createOffsetWireframeGeometry(mesh.geometry),
-    new THREE.MeshBasicMaterial({
-      color: '#ffd21a',
-      wireframe: true,
-      depthTest: true,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-  wireframe.userData.displayOverlayOwnsGeometry = true;
-  wireframe.renderOrder = mode === 'wireframe' ? 2 : 1;
-  wireframe.frustumCulled = mesh.frustumCulled;
-  overlay.add(wireframe);
-  mesh.add(overlay);
-  displayOverlayByMesh.set(mesh, overlay);
-  updateDisplayModeButtons();
-}
-
-function showAllObjectsDisplayMode(mode: ObjectDisplayMode) {
-  const visibleMeshes = objects.filter((mesh) => objectShapes.has(mesh));
-  const turnOff = visibleMeshes.length > 0 && visibleMeshes.every((mesh) => objectDisplayModes.get(mesh) === mode);
-  visibleMeshes.forEach((mesh) => setObjectDisplayMode(mesh, turnOff ? null : mode));
-  updateDisplayModeButtons();
-}
-
-function updateShowAllDisplayModeMenuLabels() {
-  const visibleMeshes = objects.filter((mesh) => objectShapes.has(mesh));
-  contextShowAllWireframeButton.textContent = visibleMeshes.length > 0 &&
-    visibleMeshes.every((mesh) => objectDisplayModes.get(mesh) === 'wireframe')
-    ? 'Hide all objects in wireframe'
-    : 'Show all objects in wireframe';
-  contextShowAllFacesButton.textContent = visibleMeshes.length > 0 &&
-    visibleMeshes.every((mesh) => objectDisplayModes.get(mesh) === 'faces')
-    ? 'Hide all object triangle outlines'
-    : 'Show all object triangle outlines';
-}
-
-function updateDisplayModeButtons() {
-  const selectedMode = selectedObject ? objectDisplayModes.get(selectedObject) : undefined;
-  displayModeButtons.forEach((button) => {
-    button.setAttribute('aria-pressed', String(button.dataset.displayMode === selectedMode));
-  });
 }
 
 const raycaster = new THREE.Raycaster();
@@ -1223,227 +1113,19 @@ function updateLightProperties(mesh: THREE.Mesh, light: EditableLight) {
 }
 
 function updateWorldSkyboxProperties(mesh: THREE.Mesh) {
-  const materials = mesh.material;
-  if (!Array.isArray(materials) || !materials.every((material) => material instanceof THREE.MeshBasicMaterial)) {
-    throw new Error(`The six-face material set for "${mesh.name}" is invalid.`);
-  }
-  if (!worldSkyboxes.has(mesh)) throw new Error(`Skybox settings for "${mesh.name}" are missing.`);
   properties.classList.remove('properties-empty');
   properties.classList.add('properties-content');
   properties.replaceChildren();
-
-  const form = document.createElement('div');
-  form.className = 'properties-form';
-  const nameLabel = document.createElement('label');
-  nameLabel.className = 'property-field';
-  nameLabel.textContent = 'Name';
-  const nameInput = document.createElement('input');
-  nameInput.type = 'text';
-  nameInput.value = mesh.name;
-  nameInput.setAttribute('aria-label', 'Skybox name');
-  nameInput.addEventListener('input', () => {
-    mesh.name = nameInput.value;
-    const row = sceneContents.querySelector<HTMLElement>(`.scene-object-row[data-uuid="${mesh.uuid}"]`);
-    const button = row?.querySelector<HTMLButtonElement>('.scene-object');
-    if (button) button.textContent = mesh.name || 'World Skybox';
-  });
-  nameLabel.appendChild(nameInput);
-  const description = document.createElement('div');
-  description.className = 'point-geometry-status';
-  description.textContent = 'Set a color or image for each inside-facing side of the world skybox.';
-  form.append(nameLabel, description);
-
-  const faceNames = ['Right (+X)', 'Left (-X)', 'Top (+Y)', 'Bottom (-Y)', 'Front (+Z)', 'Back (-Z)'];
-  const removeImageButtons: HTMLButtonElement[] = [];
-  const faceColorInputs: HTMLInputElement[] = [];
-  const atlasSection = document.createElement('section');
-  atlasSection.className = 'skybox-atlas-section';
-  const atlasHeading = document.createElement('strong');
-  atlasHeading.textContent = 'Import 4×3 cross image';
-  const atlasDescription = document.createElement('div');
-  atlasDescription.className = 'point-geometry-status';
-  atlasDescription.textContent = 'Choose a square-face cross atlas. The layout in your reference is preselected.';
-  const atlasLayoutLabel = document.createElement('label');
-  atlasLayoutLabel.className = 'property-field';
-  atlasLayoutLabel.textContent = 'Layout';
-  const atlasLayout = document.createElement('select');
-  atlasLayout.setAttribute('aria-label', 'Skybox cross layout');
-  [
-    { value: 'shown', label: 'Reference: Y+, X+, Y−, X−' },
-    { value: 'standard', label: 'Standard: +Y above, X−/Z+/X+/Z−' },
-  ].forEach(({ value, label }) => {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    atlasLayout.appendChild(option);
-  });
-  atlasLayout.value = 'shown';
-  const atlasInput = document.createElement('input');
-  atlasInput.type = 'file';
-  atlasInput.accept = 'image/png,image/jpeg,image/webp,image/avif';
-  atlasInput.setAttribute('aria-label', 'Choose skybox cross image');
-  const atlasStatus = document.createElement('div');
-  atlasStatus.className = 'point-geometry-status';
-  atlasStatus.setAttribute('role', 'status');
-  atlasInput.addEventListener('change', async () => {
-    const file = atlasInput.files?.[0];
-    if (!file) return;
-    if (!['image/png', 'image/jpeg', 'image/webp', 'image/avif'].includes(file.type)) {
-      addDebugEntry('Choose a PNG, JPEG, WebP, or AVIF cross image.', 'World Skybox');
-      atlasInput.value = '';
-      return;
-    }
-    let bitmap: ImageBitmap | null = null;
-    const textures: THREE.CanvasTexture[] = [];
-    try {
-      bitmap = await createImageBitmap(file);
-      const cellWidth = bitmap.width / 4;
-      const cellHeight = bitmap.height / 3;
-      if (bitmap.width % 4 !== 0 || bitmap.height % 3 !== 0 ||
-        Math.abs(cellWidth - cellHeight) / Math.max(cellWidth, cellHeight) > 0.02) {
-        throw new Error('The cross image must be a 4×3 grid with square face cells.');
-      }
-      const faceCells = atlasLayout.value === 'shown'
-        ? [[1, 1], [3, 1], [0, 1], [2, 1], [2, 0], [2, 2]]
-        : [[2, 1], [0, 1], [1, 0], [1, 2], [1, 1], [3, 1]];
-      const faceSize = Math.floor(Math.min(cellWidth, cellHeight));
-      for (const [column, row] of faceCells) {
-        const canvas = document.createElement('canvas');
-        canvas.width = faceSize;
-        canvas.height = faceSize;
-        const context = canvas.getContext('2d');
-        if (!context) throw new Error('Could not prepare the skybox cross image.');
-        const insetX = (cellWidth - faceSize) / 2;
-        const insetY = (cellHeight - faceSize) / 2;
-        context.drawImage(
-          bitmap,
-          column * cellWidth + insetX,
-          row * cellHeight + insetY,
-          faceSize,
-          faceSize,
-          0,
-          0,
-          faceSize,
-          faceSize,
-        );
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.mapping = THREE.UVMapping;
-        textures.push(texture);
-      }
-      materials.forEach((material, index) => {
-        material.map?.dispose();
-        material.map = textures[index];
-        material.color.set('#ffffff');
-        faceColorInputs[index].value = '#ffffff';
-        material.needsUpdate = true;
-        removeImageButtons[index].hidden = false;
-      });
-      atlasStatus.textContent = `Imported six faces from ${file.name}.`;
-    } catch (error) {
-      textures.forEach((texture) => texture.dispose());
-      const message = error instanceof Error ? error.message : String(error);
-      addDebugEntry(`Could not import the skybox cross image: ${message}`, 'World Skybox');
-      atlasStatus.textContent = 'The cross image could not be imported.';
-      atlasInput.value = '';
-    } finally {
-      bitmap?.close();
-    }
-  });
-  atlasLayoutLabel.appendChild(atlasLayout);
-  const atlasFileLabel = document.createElement('label');
-  atlasFileLabel.className = 'property-field skybox-atlas-file';
-  atlasFileLabel.textContent = 'Image';
-  atlasFileLabel.appendChild(atlasInput);
-  atlasSection.append(atlasHeading, atlasDescription, atlasLayoutLabel, atlasFileLabel, atlasStatus);
-  form.appendChild(atlasSection);
-
-  faceNames.forEach((faceName, index) => {
-    const material = materials[index];
-    const section = document.createElement('section');
-    section.className = 'skybox-face-section';
-    const heading = document.createElement('strong');
-    heading.textContent = faceName;
-    const colorLabel = document.createElement('label');
-    colorLabel.className = 'property-field';
-    colorLabel.textContent = 'Color';
-    const colorInput = document.createElement('input');
-    colorInput.type = 'color';
-    colorInput.value = `#${material.color.getHexString()}`;
-    colorInput.setAttribute('aria-label', `${faceName} skybox color`);
-    faceColorInputs.push(colorInput);
-    colorInput.addEventListener('input', () => {
-      material.color.set(colorInput.value);
-    });
-    colorLabel.appendChild(colorInput);
-
-    const imageLabel = document.createElement('label');
-    imageLabel.className = 'property-field skybox-image-field';
-    imageLabel.textContent = 'Image';
-    const imageInput = document.createElement('input');
-    imageInput.type = 'file';
-    imageInput.accept = 'image/*';
-    imageInput.setAttribute('aria-label', `Choose ${faceName} skybox image`);
-    const removeImageButton = document.createElement('button');
-    removeImageButton.type = 'button';
-    removeImageButton.className = 'skybox-remove-image';
-    removeImageButton.textContent = 'Remove image';
-    removeImageButton.hidden = !material.map;
-    removeImageButtons.push(removeImageButton);
-    removeImageButton.addEventListener('click', () => {
-      material.map?.dispose();
-      material.map = null;
-      material.needsUpdate = true;
-      imageInput.value = '';
-      removeImageButton.hidden = true;
-    });
-    imageInput.addEventListener('change', () => {
-      const file = imageInput.files?.[0];
-      if (!file) return;
-      if (!file.type.startsWith('image/')) {
-        addDebugEntry(`The selected file for ${faceName} is not an image.`, 'World Skybox');
-        imageInput.value = '';
-        return;
-      }
-      const reader = new FileReader();
-      reader.addEventListener('error', () => {
-        addDebugEntry(`Could not read the ${faceName} skybox image.`, 'World Skybox');
-        imageInput.value = '';
-      }, { once: true });
-      reader.addEventListener('load', () => {
-        if (typeof reader.result !== 'string') {
-          addDebugEntry(`Could not load the ${faceName} skybox image.`, 'World Skybox');
-          imageInput.value = '';
-          return;
-        }
-        const imageData = reader.result;
-        const textureLoader = new THREE.TextureLoader();
-        textureLoader.load(
-          imageData,
-          (texture) => {
-            texture.colorSpace = THREE.SRGBColorSpace;
-            texture.mapping = THREE.UVMapping;
-            material.map?.dispose();
-            material.map = texture;
-            material.color.set('#ffffff');
-            colorInput.value = '#ffffff';
-            material.needsUpdate = true;
-            removeImageButton.hidden = false;
-          },
-          undefined,
-          () => {
-            addDebugEntry(`Could not decode the ${faceName} skybox image.`, 'World Skybox');
-            imageInput.value = '';
-          },
-        );
-      }, { once: true });
-      reader.readAsDataURL(file);
-    });
-    imageLabel.appendChild(imageInput);
-    imageLabel.appendChild(removeImageButton);
-    section.append(heading, colorLabel, imageLabel);
-    form.appendChild(section);
-  });
+  const form = createWorldSkyboxProperties(
+    mesh,
+    (name) => {
+      mesh.name = name;
+      const row = hierarchyRows.get(mesh);
+      const button = row?.querySelector<HTMLButtonElement>('.scene-object');
+      if (button) button.textContent = name || 'World Skybox';
+    },
+    (message) => addDebugEntry(message, 'World Skybox'),
+  );
   properties.appendChild(form);
 }
 
@@ -1524,7 +1206,7 @@ function updateProperties(mesh: THREE.Mesh) {
     updateLightProperties(mesh, light);
     return;
   }
-  if (worldSkyboxes.has(mesh)) {
+  if (isWorldSkybox(mesh)) {
     updateWorldSkyboxProperties(mesh);
     return;
   }
@@ -2024,8 +1706,8 @@ function selectObject(mesh: THREE.Mesh | null) {
   if (mesh && pointGeometryPoints.has(mesh)) {
     pointGeometryPoints.get(mesh)!.forEach((point) => addGeometryPointMarker(mesh, point));
   }
-  selectionHighlight.visible = mesh !== null && !worldSkyboxes.has(mesh);
-  if (mesh && !worldSkyboxes.has(mesh)) {
+  selectionHighlight.visible = mesh !== null && !isWorldSkybox(mesh);
+  if (mesh && !isWorldSkybox(mesh)) {
     restoreMeshEmissive(mesh);
     selectionHighlight.setFromObject(mesh);
     selectionHighlightMaterial.color.copy(
@@ -2050,7 +1732,7 @@ function selectObject(mesh: THREE.Mesh | null) {
     transformControls.detach();
   } else if (pointEditObject === mesh) {
     transformControls.detach();
-  } else if (worldSkyboxes.has(mesh)) {
+  } else if (isWorldSkybox(mesh)) {
     transformControls.detach();
   } else {
     transformControls.setMode(transformMode);
@@ -2219,7 +1901,7 @@ function addHierarchyRow(mesh: THREE.Mesh) {
   pointDisclosure.className = 'point-geometry-disclosure';
   pointDisclosure.textContent = '›';
   pointDisclosure.setAttribute('aria-label', `Expand point geometry for ${mesh.name}`);
-  pointDisclosure.hidden = isLight || worldSkyboxes.has(mesh) || !pointGeoEnabled;
+  pointDisclosure.hidden = isLight || isWorldSkybox(mesh) || !pointGeoEnabled;
   const pointChild = document.createElement('button');
   pointChild.type = 'button';
   pointChild.className = 'point-geometry-child';
@@ -2232,7 +1914,7 @@ function addHierarchyRow(mesh: THREE.Mesh) {
   pointName.className = 'point-geometry-name';
   pointName.textContent = pointGeometryNames.get(mesh) ?? 'pointGeometryTriangleFillin';
   pointChild.append(pointIcon, pointName);
-  pointChild.hidden = isLight || worldSkyboxes.has(mesh) || !pointGeometryPoints.has(mesh);
+  pointChild.hidden = isLight || isWorldSkybox(mesh) || !pointGeometryPoints.has(mesh);
   pointDisclosure.addEventListener('click', () => {
     if (!pointGeometryPoints.has(mesh)) {
       beginPointEditing(mesh);
@@ -2248,7 +1930,7 @@ function addHierarchyRow(mesh: THREE.Mesh) {
   const selectButton = document.createElement('button');
   selectButton.type = 'button';
   selectButton.className = 'scene-object';
-  selectButton.draggable = !isLight && !worldSkyboxes.has(mesh);
+  selectButton.draggable = !isLight && !isWorldSkybox(mesh);
   selectButton.textContent = mesh.name || 'Object';
   selectButton.addEventListener('click', () => selectObject(mesh));
   selectButton.addEventListener('dragstart', (event) => {
@@ -2812,23 +2494,11 @@ function addWorldSkybox(): THREE.Mesh {
     selectObject(worldSkybox);
     return worldSkybox;
   }
-  const material = Array.from({ length: 6 }, () => new THREE.MeshBasicMaterial({
-    color: '#000000',
-    side: THREE.BackSide,
-    depthWrite: false,
-    toneMapped: false,
-  }));
-  const skybox = new THREE.Mesh(new THREE.BoxGeometry(40000, 40000, 40000), material);
-  skybox.name = 'World Skybox';
-  skybox.frustumCulled = false;
-  skybox.castShadow = false;
-  skybox.receiveShadow = false;
-  skybox.renderOrder = -1;
+  const skybox = createWorldSkybox((mesh) => {
+    scene.add(mesh);
+    addHierarchyRow(mesh);
+  }, selectObject);
   worldSkybox = skybox;
-  worldSkyboxes.add(skybox);
-  scene.add(skybox);
-  addHierarchyRow(skybox);
-  selectObject(skybox);
   return skybox;
 }
 
@@ -2929,7 +2599,7 @@ function uniqueObjectName(baseName: string): string {
 function cloneSelectedObject() {
   if (!selectedObject) return;
   const source = selectedObject;
-  if (worldSkyboxes.has(source)) {
+  if (isWorldSkybox(source)) {
     addDebugEntry('The World Skybox is a unique scene environment and cannot be cloned.', 'Scene Explorer');
     return;
   }
@@ -3005,7 +2675,7 @@ function cloneSelectedObject() {
       cloneMaterial.emissiveIntensity = sourceEmissive.intensity;
     }
     const cloneMesh = new THREE.Mesh(sourceMesh.geometry.clone(), cloneMaterial);
-    const sourceMaterialVisibility = originalMaterialVisibility.get(sourceMesh)?.[0];
+    const sourceMaterialVisibility = getOriginalMaterialVisibility(sourceMesh)?.[0];
     if (sourceMaterialVisibility !== undefined) cloneMaterial.visible = sourceMaterialVisibility;
     cloneMesh.name = uniqueObjectName(`${sourceMesh.name} Copy`);
     cloneMesh.position.copy(sourceMesh.position);
@@ -3095,7 +2765,10 @@ function deleteSelectedObject() {
   hierarchyRows.delete(mesh);
   objectParentByMesh.delete(mesh);
   if (formerParent) updateGroupHierarchyRow(formerParent);
-  if (worldSkybox === mesh) worldSkybox = null;
+  if (worldSkybox === mesh) {
+    worldSkybox = null;
+    clearWorldSkybox(mesh);
+  }
   sceneContents.querySelector(`.scene-object-row[data-uuid="${mesh.uuid}"]`)?.remove();
   sunSettings.get(mesh)?.flare.geometry.dispose();
   const flare = sunSettings.get(mesh)?.flare;
@@ -3154,7 +2827,7 @@ function setPlacementMode(shape: string | null) {
     placementPosition.set(0, definition.groundOffset, 0);
     previewMesh.position.copy(placementPosition);
     scene.add(previewMesh);
-  } else if (selectedObject && !worldSkyboxes.has(selectedObject) &&
+  } else if (selectedObject && !isWorldSkybox(selectedObject) &&
     transformMode !== 'select' && !isObjectLocked(selectedObject)) {
     transformControls.setMode(transformMode);
     transformControls.attach(getMeshTransformTarget(selectedObject));
@@ -3340,7 +3013,7 @@ document.querySelectorAll<HTMLButtonElement>('.tool-button').forEach((button) =>
       if (pointEditObject === selectedObject) {
         if (selectedGeometryPoints.length > 0) setGeometryPointSelection(selectedGeometryPoints);
         else transformControls.detach();
-      } else if (mode === 'select' || worldSkyboxes.has(selectedObject) || isObjectLocked(selectedObject)) {
+      } else if (mode === 'select' || isWorldSkybox(selectedObject) || isObjectLocked(selectedObject)) {
         transformControls.detach();
       } else {
         transformControls.setMode(mode);
