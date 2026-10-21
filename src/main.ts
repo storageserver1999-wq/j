@@ -456,13 +456,15 @@ transformControls.addEventListener('objectChange', () => {
     if (light instanceof THREE.DirectionalLight) light.position.copy(selectedObject.position);
   }
   if (selectedObject && transformReadouts) {
-    const { position, rotation, scale } = selectedObject;
+    const transformTarget = getMeshTransformTarget(selectedObject);
+    const { position, rotation } = transformTarget;
+    const { scale } = selectedObject;
     transformReadouts.position.textContent = `Position: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}`;
     transformReadouts.rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(rotation.z).toFixed(1)}°`;
     transformReadouts.scale.textContent = `Scale: ${scale.x.toFixed(2)}, ${scale.y.toFixed(2)}, ${scale.z.toFixed(2)}`;
     for (const axis of ['x', 'y', 'z'] as const) {
       const input = properties.querySelector<HTMLInputElement>(`[aria-label="Position ${axis.toUpperCase()}"]`);
-      if (input) input.value = selectedObject.position[axis].toFixed(2);
+      if (input) input.value = transformTarget.position[axis].toFixed(2);
     }
   }
 });
@@ -515,6 +517,8 @@ const objectShapes = new WeakMap<THREE.Mesh, string>();
 const joinedModels = new WeakSet<THREE.Mesh>();
 const hierarchyRows = new WeakMap<THREE.Mesh, HTMLDivElement>();
 const expandedGroups = new WeakSet<THREE.Mesh>();
+const groupPivotByMesh = new WeakMap<THREE.Mesh, THREE.Group>();
+const objectParentByMesh = new WeakMap<THREE.Mesh, THREE.Mesh>();
 const smoothShadingByMesh = new WeakMap<THREE.Mesh, boolean>();
 const lightDirectionIndicators = new WeakMap<THREE.Mesh, THREE.ArrowHelper>();
 type ObjectDisplayMode = 'wireframe' | 'faces';
@@ -537,12 +541,42 @@ type MaterialPreset = 'Rubber' | 'Concrete' | 'Glass';
 const objectMaterialPresets = new WeakMap<THREE.Mesh, MaterialPreset>();
 
 function getChildMeshes(mesh: THREE.Mesh): THREE.Mesh[] {
-  return objects.filter((object) =>
-    object !== mesh && isGroupableMesh(object) && mesh.getObjectById(object.id) === object);
+  return objects.filter((object) => {
+    if (object === mesh || !isGroupableMesh(object)) return false;
+    let parent = objectParentByMesh.get(object);
+    while (parent) {
+      if (parent === mesh) return true;
+      parent = objectParentByMesh.get(parent);
+    }
+    return false;
+  });
 }
 
 function isGroupableMesh(mesh: THREE.Mesh): boolean {
   return objectShapes.has(mesh) && !worldSkyboxes.has(mesh);
+}
+
+function getMeshTransformTarget(mesh: THREE.Mesh, mode = transformMode): THREE.Object3D {
+  return mode !== 'scale' ? groupPivotByMesh.get(mesh) ?? mesh : mesh;
+}
+
+function ensureGroupPivot(mesh: THREE.Mesh): THREE.Group {
+  const existingPivot = groupPivotByMesh.get(mesh);
+  if (existingPivot) return existingPivot;
+  if (!isGroupableMesh(mesh)) throw new Error(`"${mesh.name}" cannot be used as a group pivot.`);
+
+  const parent = mesh.parent ?? scene;
+  const pivot = new THREE.Group();
+  pivot.name = `${mesh.name} Group Pivot`;
+  pivot.position.copy(mesh.position);
+  pivot.quaternion.copy(mesh.quaternion);
+  pivot.scale.setScalar(1);
+  parent.add(pivot);
+  pivot.add(mesh);
+  mesh.position.set(0, 0, 0);
+  mesh.quaternion.identity();
+  groupPivotByMesh.set(mesh, pivot);
+  return pivot;
 }
 
 function getHierarchyChildContainer(mesh: THREE.Mesh): HTMLDivElement {
@@ -554,23 +588,35 @@ function getHierarchyChildContainer(mesh: THREE.Mesh): HTMLDivElement {
 
 function moveMeshToParent(mesh: THREE.Mesh, parent: THREE.Mesh | null) {
   if (!isGroupableMesh(mesh) || (parent && !isGroupableMesh(parent))) return;
-  if (parent && (mesh === parent || mesh.getObjectById(parent.id) === parent)) return;
-  if (parent === mesh.parent) return;
-  const previousParent = mesh.parent instanceof THREE.Mesh ? mesh.parent : null;
-  if (parent) parent.attach(mesh);
-  else scene.attach(mesh);
+  if (parent && (mesh === parent || getChildMeshes(mesh).includes(parent))) return;
+  const previousParent = objectParentByMesh.get(mesh) ?? null;
+  if (parent === previousParent) return;
+  const node = groupPivotByMesh.get(mesh) ?? mesh;
+  const parentHadPivot = parent ? groupPivotByMesh.has(parent) : false;
+  const container = parent ? ensureGroupPivot(parent) : scene;
+  if (parent && !parentHadPivot && selectedObject === parent && transformMode !== 'select') {
+    transformControls.attach(getMeshTransformTarget(parent));
+    updateProperties(parent);
+  }
+  container.attach(node);
+  if (parent) objectParentByMesh.set(mesh, parent);
+  else objectParentByMesh.delete(mesh);
 
   const row = hierarchyRows.get(mesh);
   if (!row) throw new Error(`The Scene Explorer row for "${mesh.name}" is unavailable.`);
-  const container = parent ? getHierarchyChildContainer(parent) : sceneContents;
-  container.appendChild(row);
+  const rowContainer = parent ? getHierarchyChildContainer(parent) : sceneContents;
+  rowContainer.appendChild(row);
   if (parent) {
     expandedGroups.add(parent);
     updateGroupHierarchyRow(parent);
+    if (selectedObject === parent && !groupPivotByMesh.has(parent)) ensureGroupPivot(parent);
   }
   if (previousParent) updateGroupHierarchyRow(previousParent);
   if (selectedObject && (selectedObject === parent || selectedObject === previousParent)) {
     updateProperties(selectedObject);
+    if (transformMode !== 'select' && !isObjectLocked(selectedObject)) {
+      transformControls.attach(getMeshTransformTarget(selectedObject));
+    }
   }
 }
 
@@ -580,7 +626,7 @@ function updateGroupHierarchyRow(mesh: THREE.Mesh) {
   const toggle = row.querySelector<HTMLButtonElement>('.scene-group-disclosure');
   const container = row.querySelector<HTMLDivElement>('.scene-object-children');
   if (!toggle || !container) throw new Error(`The Scene Explorer group controls for "${mesh.name}" are unavailable.`);
-  const hasChildren = getChildMeshes(mesh).some(isGroupableMesh);
+  const hasChildren = getChildMeshes(mesh).length > 0;
   toggle.hidden = !hasChildren;
   container.hidden = !hasChildren || !expandedGroups.has(mesh);
   toggle.textContent = container.hidden ? '›' : '⌄';
@@ -590,15 +636,8 @@ function updateGroupHierarchyRow(mesh: THREE.Mesh) {
 
 function groupChildMeshes(parent: THREE.Mesh) {
   if (!isGroupableMesh(parent)) return;
-  getChildMeshes(parent).forEach((child) => {
-    if (child.parent === parent) return;
-    const previousParent = child.parent instanceof THREE.Mesh ? child.parent : null;
-    parent.attach(child);
-    const row = hierarchyRows.get(child);
-    if (!row) throw new Error(`The Scene Explorer row for "${child.name}" is unavailable.`);
-    getHierarchyChildContainer(parent).appendChild(row);
-    if (previousParent) updateGroupHierarchyRow(previousParent);
-  });
+  const children = getChildMeshes(parent);
+  children.forEach((child) => moveMeshToParent(child, parent));
   expandedGroups.add(parent);
   updateGroupHierarchyRow(parent);
   if (selectedObject === parent) updateProperties(parent);
@@ -608,7 +647,7 @@ function modelChildMeshes(parent: THREE.Mesh) {
   const children = getChildMeshes(parent);
   if (!isGroupableMesh(parent) || children.length === 0) return;
   const sources = [parent, ...children];
-  const outerParent = parent.parent instanceof THREE.Mesh ? parent.parent : null;
+  const outerParent = objectParentByMesh.get(parent) ?? null;
   const parentMaterial = parent.material;
   const materialSource = parentMaterial instanceof THREE.MeshStandardMaterial
     ? parentMaterial
@@ -618,8 +657,9 @@ function modelChildMeshes(parent: THREE.Mesh) {
     return;
   }
 
-  parent.updateWorldMatrix(true, true);
-  const inverseParent = parent.matrixWorld.clone().invert();
+  const parentPivot = ensureGroupPivot(parent);
+  parentPivot.updateWorldMatrix(true, true);
+  const inverseParent = parentPivot.matrixWorld.clone().invert();
   const pieces: THREE.BufferGeometry[] = [];
   try {
     for (const child of sources) {
@@ -655,17 +695,18 @@ function modelChildMeshes(parent: THREE.Mesh) {
     material.vertexColors = false;
     const model = new THREE.Mesh(merged, material);
     model.name = parent.name;
-    model.position.copy(parent.position);
-    model.rotation.copy(parent.rotation);
-    model.scale.copy(parent.scale);
+    model.position.set(0, 0, 0);
+    model.rotation.set(0, 0, 0);
+    model.scale.set(1, 1, 1);
     model.castShadow = sources.some((child) => child.castShadow);
     model.receiveShadow = sources.some((child) => child.receiveShadow);
     model.frustumCulled = true;
-    if (outerParent) outerParent.add(model);
-    else scene.add(model);
+    parentPivot.add(model);
     objects.push(model);
     objectShapes.set(model, 'Joined Model');
     joinedModels.add(model);
+    groupPivotByMesh.set(model, parentPivot);
+    if (outerParent) objectParentByMesh.set(model, outerParent);
     smoothShadingByMesh.set(model, true);
     objectMaterialPresets.set(model, objectMaterialPresets.get(parent) ?? 'Rubber');
     const parentDisplayMode = objectDisplayModes.get(parent);
@@ -673,15 +714,22 @@ function modelChildMeshes(parent: THREE.Mesh) {
 
     sources.forEach((child) => {
       setObjectDisplayMode(child, null);
+      const childPivot = groupPivotByMesh.get(child);
+      if (childPivot && child !== parent) {
+        childPivot.removeFromParent();
+        groupPivotByMesh.delete(child);
+      }
       child.removeFromParent();
       const objectIndex = objects.indexOf(child);
       if (objectIndex >= 0) objects.splice(objectIndex, 1);
+      objectParentByMesh.delete(child);
       hierarchyRows.get(child)?.remove();
       hierarchyRows.delete(child);
       child.geometry.dispose();
       if (Array.isArray(child.material)) child.material.forEach((entry) => entry.dispose());
       else child.material.dispose();
     });
+    groupPivotByMesh.delete(parent);
     addHierarchyRow(model);
     if (outerParent) updateGroupHierarchyRow(outerParent);
     selectObject(model);
@@ -1057,8 +1105,9 @@ function updateLightProperties(mesh: THREE.Mesh, light: EditableLight) {
   rotation.className = 'transform-readout';
   scale.className = 'transform-readout';
   transformReadouts = { position, rotation, scale };
-  position.textContent = `Position: ${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)}, ${mesh.position.z.toFixed(2)}`;
-  rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(mesh.rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(mesh.rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(mesh.rotation.z).toFixed(1)}°`;
+  const transformTarget = getMeshTransformTarget(mesh);
+  position.textContent = `Position: ${transformTarget.position.x.toFixed(2)}, ${transformTarget.position.y.toFixed(2)}, ${transformTarget.position.z.toFixed(2)}`;
+  rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(transformTarget.rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(transformTarget.rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(transformTarget.rotation.z).toFixed(1)}°`;
   scale.textContent = `Scale: ${mesh.scale.x.toFixed(2)}, ${mesh.scale.y.toFixed(2)}, ${mesh.scale.z.toFixed(2)}`;
 
   const sun = sunSettings.get(mesh);
@@ -1205,6 +1254,110 @@ function updateWorldSkyboxProperties(mesh: THREE.Mesh) {
   form.append(nameLabel, description);
 
   const faceNames = ['Right (+X)', 'Left (-X)', 'Top (+Y)', 'Bottom (-Y)', 'Front (+Z)', 'Back (-Z)'];
+  const removeImageButtons: HTMLButtonElement[] = [];
+  const faceColorInputs: HTMLInputElement[] = [];
+  const atlasSection = document.createElement('section');
+  atlasSection.className = 'skybox-atlas-section';
+  const atlasHeading = document.createElement('strong');
+  atlasHeading.textContent = 'Import 4×3 cross image';
+  const atlasDescription = document.createElement('div');
+  atlasDescription.className = 'point-geometry-status';
+  atlasDescription.textContent = 'Choose a square-face cross atlas. The layout in your reference is preselected.';
+  const atlasLayoutLabel = document.createElement('label');
+  atlasLayoutLabel.className = 'property-field';
+  atlasLayoutLabel.textContent = 'Layout';
+  const atlasLayout = document.createElement('select');
+  atlasLayout.setAttribute('aria-label', 'Skybox cross layout');
+  [
+    { value: 'shown', label: 'Reference: Y+, X+, Y−, X−' },
+    { value: 'standard', label: 'Standard: +Y above, X−/Z+/X+/Z−' },
+  ].forEach(({ value, label }) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    atlasLayout.appendChild(option);
+  });
+  atlasLayout.value = 'shown';
+  const atlasInput = document.createElement('input');
+  atlasInput.type = 'file';
+  atlasInput.accept = 'image/png,image/jpeg,image/webp,image/avif';
+  atlasInput.setAttribute('aria-label', 'Choose skybox cross image');
+  const atlasStatus = document.createElement('div');
+  atlasStatus.className = 'point-geometry-status';
+  atlasStatus.setAttribute('role', 'status');
+  atlasInput.addEventListener('change', async () => {
+    const file = atlasInput.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/avif'].includes(file.type)) {
+      addDebugEntry('Choose a PNG, JPEG, WebP, or AVIF cross image.', 'World Skybox');
+      atlasInput.value = '';
+      return;
+    }
+    let bitmap: ImageBitmap | null = null;
+    const textures: THREE.CanvasTexture[] = [];
+    try {
+      bitmap = await createImageBitmap(file);
+      const cellWidth = bitmap.width / 4;
+      const cellHeight = bitmap.height / 3;
+      if (bitmap.width % 4 !== 0 || bitmap.height % 3 !== 0 ||
+        Math.abs(cellWidth - cellHeight) / Math.max(cellWidth, cellHeight) > 0.02) {
+        throw new Error('The cross image must be a 4×3 grid with square face cells.');
+      }
+      const faceCells = atlasLayout.value === 'shown'
+        ? [[1, 1], [3, 1], [0, 1], [2, 1], [2, 0], [2, 2]]
+        : [[2, 1], [0, 1], [1, 0], [1, 2], [1, 1], [3, 1]];
+      const faceSize = Math.floor(Math.min(cellWidth, cellHeight));
+      for (const [column, row] of faceCells) {
+        const canvas = document.createElement('canvas');
+        canvas.width = faceSize;
+        canvas.height = faceSize;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Could not prepare the skybox cross image.');
+        const insetX = (cellWidth - faceSize) / 2;
+        const insetY = (cellHeight - faceSize) / 2;
+        context.drawImage(
+          bitmap,
+          column * cellWidth + insetX,
+          row * cellHeight + insetY,
+          faceSize,
+          faceSize,
+          0,
+          0,
+          faceSize,
+          faceSize,
+        );
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.mapping = THREE.UVMapping;
+        textures.push(texture);
+      }
+      materials.forEach((material, index) => {
+        material.map?.dispose();
+        material.map = textures[index];
+        material.color.set('#ffffff');
+        faceColorInputs[index].value = '#ffffff';
+        material.needsUpdate = true;
+        removeImageButtons[index].hidden = false;
+      });
+      atlasStatus.textContent = `Imported six faces from ${file.name}.`;
+    } catch (error) {
+      textures.forEach((texture) => texture.dispose());
+      const message = error instanceof Error ? error.message : String(error);
+      addDebugEntry(`Could not import the skybox cross image: ${message}`, 'World Skybox');
+      atlasStatus.textContent = 'The cross image could not be imported.';
+      atlasInput.value = '';
+    } finally {
+      bitmap?.close();
+    }
+  });
+  atlasLayoutLabel.appendChild(atlasLayout);
+  const atlasFileLabel = document.createElement('label');
+  atlasFileLabel.className = 'property-field skybox-atlas-file';
+  atlasFileLabel.textContent = 'Image';
+  atlasFileLabel.appendChild(atlasInput);
+  atlasSection.append(atlasHeading, atlasDescription, atlasLayoutLabel, atlasFileLabel, atlasStatus);
+  form.appendChild(atlasSection);
+
   faceNames.forEach((faceName, index) => {
     const material = materials[index];
     const section = document.createElement('section');
@@ -1218,6 +1371,7 @@ function updateWorldSkyboxProperties(mesh: THREE.Mesh) {
     colorInput.type = 'color';
     colorInput.value = `#${material.color.getHexString()}`;
     colorInput.setAttribute('aria-label', `${faceName} skybox color`);
+    faceColorInputs.push(colorInput);
     colorInput.addEventListener('input', () => {
       material.color.set(colorInput.value);
     });
@@ -1235,6 +1389,7 @@ function updateWorldSkyboxProperties(mesh: THREE.Mesh) {
     removeImageButton.className = 'skybox-remove-image';
     removeImageButton.textContent = 'Remove image';
     removeImageButton.hidden = !material.map;
+    removeImageButtons.push(removeImageButton);
     removeImageButton.addEventListener('click', () => {
       material.map?.dispose();
       material.map = null;
@@ -1354,8 +1509,9 @@ function updateJoinedModelProperties(mesh: THREE.Mesh) {
   rotation.className = 'transform-readout';
   scale.className = 'transform-readout';
   transformReadouts = { position, rotation, scale };
-  position.textContent = `Position: ${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)}, ${mesh.position.z.toFixed(2)}`;
-  rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(mesh.rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(mesh.rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(mesh.rotation.z).toFixed(1)}°`;
+  const transformTarget = getMeshTransformTarget(mesh);
+  position.textContent = `Position: ${transformTarget.position.x.toFixed(2)}, ${transformTarget.position.y.toFixed(2)}, ${transformTarget.position.z.toFixed(2)}`;
+  rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(transformTarget.rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(transformTarget.rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(transformTarget.rotation.z).toFixed(1)}°`;
   scale.textContent = `Scale: ${mesh.scale.x.toFixed(2)}, ${mesh.scale.y.toFixed(2)}, ${mesh.scale.z.toFixed(2)}`;
   form.append(nameLabel, chromatics, position, rotation, scale);
   properties.appendChild(form);
@@ -1823,9 +1979,10 @@ function updateProperties(mesh: THREE.Mesh) {
   rotation.className = 'transform-readout';
   scale.className = 'transform-readout';
   transformReadouts = { position, rotation, scale };
-  const { x, y, z } = mesh.position;
+  const transformTarget = getMeshTransformTarget(mesh);
+  const { x, y, z } = transformTarget.position;
   position.textContent = `Position: ${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`;
-  rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(mesh.rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(mesh.rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(mesh.rotation.z).toFixed(1)}°`;
+  rotation.textContent = `Rotation: ${THREE.MathUtils.radToDeg(transformTarget.rotation.x).toFixed(1)}°, ${THREE.MathUtils.radToDeg(transformTarget.rotation.y).toFixed(1)}°, ${THREE.MathUtils.radToDeg(transformTarget.rotation.z).toFixed(1)}°`;
   scale.textContent = `Scale: ${mesh.scale.x.toFixed(2)}, ${mesh.scale.y.toFixed(2)}, ${mesh.scale.z.toFixed(2)}`;
 
   form.append(nameLabel, modelSection, chromaticsSection, position, rotation, scale);
@@ -1897,7 +2054,7 @@ function selectObject(mesh: THREE.Mesh | null) {
     transformControls.detach();
   } else {
     transformControls.setMode(transformMode);
-    transformControls.attach(mesh);
+    transformControls.attach(getMeshTransformTarget(mesh));
   }
 }
 
@@ -1940,7 +2097,7 @@ function setObjectLocked(mesh: THREE.Mesh, locked: boolean) {
     if (locked) transformControls.detach();
     else if (transformMode !== 'select') {
       transformControls.setMode(transformMode);
-      transformControls.attach(mesh);
+      transformControls.attach(getMeshTransformTarget(mesh));
     }
   }
 }
@@ -2142,7 +2299,7 @@ function addHierarchyRow(mesh: THREE.Mesh) {
   line.append(groupDisclosure, pointDisclosure, selectButton, lockButton);
   row.append(line, pointChild, children);
   hierarchyRows.set(mesh, row);
-  const parent = mesh.parent instanceof THREE.Mesh && isGroupableMesh(mesh.parent) ? mesh.parent : null;
+  const parent = objectParentByMesh.get(mesh) ?? null;
   if (parent && hierarchyRows.has(parent)) {
     getHierarchyChildContainer(parent).appendChild(row);
     expandedGroups.add(parent);
@@ -2524,7 +2681,7 @@ function finishPointEditing(save: boolean) {
     updateProperties(mesh);
     if (transformMode !== 'select' && !isObjectLocked(mesh)) {
       transformControls.setMode(transformMode);
-      transformControls.attach(mesh);
+      transformControls.attach(getMeshTransformTarget(mesh));
     }
   }
   return true;
@@ -2832,82 +2989,68 @@ function cloneSelectedObject() {
   if (!(sourceMaterial instanceof THREE.MeshStandardMaterial)) {
     throw new Error(`Cannot clone the material for "${source.name}".`);
   }
-  const cloneMaterial = sourceMaterial.clone();
-  const sourceEmissive = originalEmissive.get(source);
-  if (sourceEmissive) {
-    cloneMaterial.emissive.copy(sourceEmissive.color);
-    cloneMaterial.emissiveIntensity = sourceEmissive.intensity;
-  }
-  const clone = new THREE.Mesh(source.geometry.clone(), cloneMaterial);
-  const sourceMaterialVisibility = originalMaterialVisibility.get(source)?.[0];
-  if (sourceMaterialVisibility !== undefined) cloneMaterial.visible = sourceMaterialVisibility;
-  clone.name = uniqueObjectName(`${source.name} Copy`);
-  clone.position.copy(source.position);
-  clone.rotation.copy(source.rotation);
-  clone.scale.copy(source.scale);
-  const sourceParent = source.parent instanceof THREE.Mesh && isGroupableMesh(source.parent)
-    ? source.parent
-    : null;
   source.updateWorldMatrix(true, false);
   const bounds = new THREE.Box3().setFromObject(source);
-  source.geometry.computeBoundingBox();
-  clone.position.x += sourceParent
-    ? source.geometry.boundingBox?.getSize(new THREE.Vector3()).x ?? 1
-    : bounds.getSize(new THREE.Vector3()).x;
-  clone.position.x += 0.1;
-  objectShapes.set(clone, objectShapes.get(source)!);
-  if (joinedModels.has(source)) joinedModels.add(clone);
-  smoothShadingByMesh.set(clone, smoothShadingByMesh.get(source) ?? true);
-  const displayMode = objectDisplayModes.get(source);
-  if (displayMode) setObjectDisplayMode(clone, displayMode);
-  objectMaterialPresets.set(clone, objectMaterialPresets.get(source) ?? 'Rubber');
-  const savedPoints = pointGeometryPoints.get(source);
-  if (savedPoints) pointGeometryPoints.set(clone, savedPoints.map((point) => point.clone()));
-  const savedBasePoints = pointGeometryBasePoints.get(source);
-  if (savedBasePoints) pointGeometryBasePoints.set(clone, savedBasePoints.map((point) => point.clone()));
-  const savedPointName = pointGeometryNames.get(source);
-  if (savedPointName) pointGeometryNames.set(clone, savedPointName);
-  if (sourceParent) sourceParent.add(clone);
-  else scene.add(clone);
-  objects.push(clone);
-  addHierarchyRow(clone);
-  const cloneBySource = new Map<THREE.Mesh, THREE.Mesh>([[source, clone]]);
-  const sourceChildren = getChildMeshes(source).sort((left, right) => {
-    const depth = (mesh: THREE.Mesh) => {
-      let value = 0;
-      let current: THREE.Object3D | null = mesh;
-      while (current && current !== source) {
-        value += 1;
-        current = current.parent;
-      }
-      return value;
-    };
-    return depth(left) - depth(right);
-  });
-  sourceChildren.forEach((sourceChild) => {
-    if (!(sourceChild.material instanceof THREE.MeshStandardMaterial)) {
-      throw new Error(`Cannot clone the material for "${sourceChild.name}".`);
+  const offsetX = Math.max(bounds.getSize(new THREE.Vector3()).x, 1) + 0.1;
+  const cloneTree = (sourceMesh: THREE.Mesh, destinationParent: THREE.Mesh | null, isRoot: boolean): THREE.Mesh => {
+    const sourceChildren = objects.filter((candidate) => objectParentByMesh.get(candidate) === sourceMesh);
+    const sourceMeshMaterial = sourceMesh.material;
+    if (!(sourceMeshMaterial instanceof THREE.MeshStandardMaterial)) {
+      throw new Error(`Cannot clone the material for "${sourceMesh.name}".`);
     }
-    const childClone = new THREE.Mesh(sourceChild.geometry.clone(), sourceChild.material.clone());
-    childClone.name = uniqueObjectName(`${sourceChild.name} Copy`);
-    childClone.position.copy(sourceChild.position);
-    childClone.rotation.copy(sourceChild.rotation);
-    childClone.scale.copy(sourceChild.scale);
-    objectShapes.set(childClone, objectShapes.get(sourceChild)!);
-    if (joinedModels.has(sourceChild)) joinedModels.add(childClone);
-    smoothShadingByMesh.set(childClone, smoothShadingByMesh.get(sourceChild) ?? true);
-    objectMaterialPresets.set(childClone, objectMaterialPresets.get(sourceChild) ?? 'Rubber');
-    const childDisplayMode = objectDisplayModes.get(sourceChild);
-    if (childDisplayMode) setObjectDisplayMode(childClone, childDisplayMode);
-    const parentClone = sourceChild.parent instanceof THREE.Mesh
-      ? cloneBySource.get(sourceChild.parent)
-      : undefined;
-    if (parentClone) parentClone.add(childClone);
-    else clone.add(childClone);
-    cloneBySource.set(sourceChild, childClone);
-    objects.push(childClone);
-    addHierarchyRow(childClone);
-  });
+    const cloneMaterial = sourceMeshMaterial.clone();
+    const sourceEmissive = originalEmissive.get(sourceMesh);
+    if (sourceEmissive) {
+      cloneMaterial.emissive.copy(sourceEmissive.color);
+      cloneMaterial.emissiveIntensity = sourceEmissive.intensity;
+    }
+    const cloneMesh = new THREE.Mesh(sourceMesh.geometry.clone(), cloneMaterial);
+    const sourceMaterialVisibility = originalMaterialVisibility.get(sourceMesh)?.[0];
+    if (sourceMaterialVisibility !== undefined) cloneMaterial.visible = sourceMaterialVisibility;
+    cloneMesh.name = uniqueObjectName(`${sourceMesh.name} Copy`);
+    cloneMesh.position.copy(sourceMesh.position);
+    cloneMesh.rotation.copy(sourceMesh.rotation);
+    cloneMesh.scale.copy(sourceMesh.scale);
+    objectShapes.set(cloneMesh, objectShapes.get(sourceMesh)!);
+    if (joinedModels.has(sourceMesh)) joinedModels.add(cloneMesh);
+    smoothShadingByMesh.set(cloneMesh, smoothShadingByMesh.get(sourceMesh) ?? true);
+    objectMaterialPresets.set(cloneMesh, objectMaterialPresets.get(sourceMesh) ?? 'Rubber');
+    const displayMode = objectDisplayModes.get(sourceMesh);
+    if (displayMode) setObjectDisplayMode(cloneMesh, displayMode);
+    const savedPoints = pointGeometryPoints.get(sourceMesh);
+    if (savedPoints) pointGeometryPoints.set(cloneMesh, savedPoints.map((point) => point.clone()));
+    const savedBasePoints = pointGeometryBasePoints.get(sourceMesh);
+    if (savedBasePoints) pointGeometryBasePoints.set(cloneMesh, savedBasePoints.map((point) => point.clone()));
+    const savedPointName = pointGeometryNames.get(sourceMesh);
+    if (savedPointName) pointGeometryNames.set(cloneMesh, savedPointName);
+    const sourcePivot = groupPivotByMesh.get(sourceMesh);
+    if (sourcePivot) {
+      const clonePivot = new THREE.Group();
+      clonePivot.name = `${cloneMesh.name} Group Pivot`;
+      clonePivot.position.copy(sourcePivot.position);
+      clonePivot.quaternion.copy(sourcePivot.quaternion);
+      clonePivot.scale.setScalar(1);
+      const destination = destinationParent ? ensureGroupPivot(destinationParent) : scene;
+      destination.add(clonePivot);
+      clonePivot.add(cloneMesh);
+      groupPivotByMesh.set(cloneMesh, clonePivot);
+    } else {
+      const destination = destinationParent ? ensureGroupPivot(destinationParent) : scene;
+      destination.add(cloneMesh);
+    }
+    if (destinationParent) objectParentByMesh.set(cloneMesh, destinationParent);
+    objects.push(cloneMesh);
+    addHierarchyRow(cloneMesh);
+    if (isRoot) {
+      const pivot = groupPivotByMesh.get(cloneMesh);
+      if (pivot) pivot.position.x += offsetX;
+      else cloneMesh.position.x += offsetX;
+    }
+    sourceChildren.forEach((child) => cloneTree(child, cloneMesh, false));
+    return cloneMesh;
+  };
+
+  const clone = cloneTree(source, objectParentByMesh.get(source) ?? null, true);
   selectObject(clone);
 }
 
@@ -2917,13 +3060,17 @@ function deleteSelectedObject() {
   clearGeometryPointMarkers();
   setEyedropperEnabled(false);
   const mesh = selectedObject;
-  const formerParent = mesh.parent instanceof THREE.Mesh ? mesh.parent : null;
+  const formerParent = objectParentByMesh.get(mesh) ?? null;
   const descendants = getChildMeshes(mesh);
   descendants.forEach((child) => {
     setObjectDisplayMode(child, null);
+    const childPivot = groupPivotByMesh.get(child);
+    childPivot?.removeFromParent();
+    if (childPivot) groupPivotByMesh.delete(child);
     child.removeFromParent();
     const index = objects.indexOf(child);
     if (index >= 0) objects.splice(index, 1);
+    objectParentByMesh.delete(child);
     hierarchyRows.get(child)?.remove();
     hierarchyRows.delete(child);
     child.geometry.dispose();
@@ -2937,10 +3084,16 @@ function deleteSelectedObject() {
   if (light instanceof THREE.DirectionalLight) {
     scene.remove(light, light.target);
   }
+  const groupPivot = groupPivotByMesh.get(mesh);
+  if (groupPivot) {
+    groupPivot.removeFromParent();
+    groupPivotByMesh.delete(mesh);
+  }
   scene.remove(mesh);
   const objectIndex = objects.indexOf(mesh);
   if (objectIndex >= 0) objects.splice(objectIndex, 1);
   hierarchyRows.delete(mesh);
+  objectParentByMesh.delete(mesh);
   if (formerParent) updateGroupHierarchyRow(formerParent);
   if (worldSkybox === mesh) worldSkybox = null;
   sceneContents.querySelector(`.scene-object-row[data-uuid="${mesh.uuid}"]`)?.remove();
@@ -3004,7 +3157,7 @@ function setPlacementMode(shape: string | null) {
   } else if (selectedObject && !worldSkyboxes.has(selectedObject) &&
     transformMode !== 'select' && !isObjectLocked(selectedObject)) {
     transformControls.setMode(transformMode);
-    transformControls.attach(selectedObject);
+    transformControls.attach(getMeshTransformTarget(selectedObject));
   }
   if (lastCursorEvent) updateCursorAppearance(lastCursorEvent);
 }
@@ -3191,7 +3344,7 @@ document.querySelectorAll<HTMLButtonElement>('.tool-button').forEach((button) =>
         transformControls.detach();
       } else {
         transformControls.setMode(mode);
-        transformControls.attach(selectedObject);
+        transformControls.attach(getMeshTransformTarget(selectedObject, mode));
       }
     }
   });

@@ -142,6 +142,11 @@ button:focus-visible, input:focus-visible { outline: 1px solid #d0d0d0; outline-
 .scene-explorer-actions .insert-button, .scene-explorer-actions .world-insert-button { height: 25px; min-width: 0; padding: 0 7px; border: 1px solid #3d3d3d; border-radius: 0; font-size: 10px; }
 .world-insert-menu { left: auto; right: 0; }
 .skybox-face-section { display: grid; grid-template-columns: 1fr; gap: 7px; padding: 9px; border: 1px solid #3b3b3b; background: #252525; }
+.skybox-atlas-section { display: flex; flex-direction: column; gap: 7px; padding: 9px; border: 1px solid #3b3b3b; background: #252525; }
+.skybox-atlas-section > strong { color: #ddd; font-size: 11px; font-weight: 600; }
+.skybox-atlas-section .property-field { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; }
+.skybox-atlas-section select, .skybox-atlas-section input[type="file"] { min-width: 0; width: 100%; color: #ccc; font: inherit; font-size: 10px; }
+.skybox-atlas-section select { padding: 5px; border: 1px solid #414141; border-radius: 0; background: #191919; }
 .skybox-face-section > strong { color: #ddd; font-size: 11px; font-weight: 600; }
 .skybox-face-section .property-field { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; }
 .skybox-face-section input[type="color"] { width: 100%; min-height: 25px; padding: 2px; border: 1px solid #4a4a4a; border-radius: 0; background: #292929; }
