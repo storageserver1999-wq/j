@@ -102,6 +102,7 @@ button:focus-visible, input:focus-visible { outline: 1px solid #d0d0d0; outline-
 .lighting-menu[hidden] { display: none; }
 .lighting-menu > button { width: 100%; padding: 7px 9px; border: 1px solid transparent; border-radius: 2px; background: transparent; color: #ddd; font-size: 11px; text-align: left; }
 .lighting-menu > button:hover { border-color: #454545; background: #393939; }
+.lighting-menu > .sun-rays-button[aria-pressed="true"] { border-color: #5d5941; background: #343022; color: #f1d994; }
 .tool-button { min-width: 60px; padding: 6px 10px; border: 1px solid #3d3d3d; border-radius: 3px; background: #292929; color: #c4c4c4; font-size: 12px; text-align: center; }
 .tool-icon-button { width: 38px; min-width: 38px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 2px; }
 .tool-icon-button img { width: 28px; height: 28px; object-fit: contain; image-rendering: pixelated; }

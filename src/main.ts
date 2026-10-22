@@ -45,6 +45,7 @@ const featureButtonElement = document.querySelector<HTMLButtonElement>('.feature
 const featureMenuElement = document.querySelector<HTMLDivElement>('#feature-menu');
 const lightingButtonElement = document.querySelector<HTMLButtonElement>('.lighting-button');
 const lightingMenuElement = document.querySelector<HTMLDivElement>('#lighting-menu');
+const sunRaysButtonElement = document.querySelector<HTMLButtonElement>('.sun-rays-button');
 const worldInsertButtonElement = document.querySelector<HTMLButtonElement>('.world-insert-button');
 const worldInsertMenuElement = document.querySelector<HTMLDivElement>('#world-insert-menu');
 const worldSkyboxInsertButtonElement = document.querySelector<HTMLButtonElement>('.world-skybox-insert');
@@ -79,7 +80,7 @@ if (!viewportElement || !gpuErrorElement || !editorElement || !toolbarElement ||
   !autoOpenModelElement || !autoOpenChromaticsElement || !uiAccentColorElement ||
   !uiBackgroundColorElement || !uiPanelColorElement || !resetUiColorsElement ||
   !lightingTechnologyElement || !selectionBoxElement ||
-  !featureButtonElement || !featureMenuElement || !lightingButtonElement || !lightingMenuElement ||
+  !featureButtonElement || !featureMenuElement || !lightingButtonElement || !lightingMenuElement || !sunRaysButtonElement ||
   !worldInsertButtonElement || !worldInsertMenuElement || !worldSkyboxInsertButtonElement ||
   !sceneContentsElement || !sceneDisclosureElement || !propertiesElement ||
   !distanceInputElement || !distanceOutputElement || !customCursorElement || !snapButtonElement ||
@@ -122,6 +123,7 @@ const featureButton = featureButtonElement;
 const featureMenu = featureMenuElement;
 const lightingButton = lightingButtonElement;
 const lightingMenu = lightingMenuElement;
+const sunRaysButton = sunRaysButtonElement;
 const worldInsertButton = worldInsertButtonElement;
 const worldInsertMenu = worldInsertMenuElement;
 const worldSkyboxInsertButton = worldSkyboxInsertButtonElement;
@@ -744,8 +746,11 @@ interface SunSettings {
   size: number;
   flare: THREE.Mesh;
   glow: THREE.Sprite;
+  rays: THREE.Sprite;
 }
 const sunSettings = new WeakMap<THREE.Mesh, SunSettings>();
+const sunMeshes = new Set<THREE.Mesh>();
+let sunRaysEnabled = false;
 let worldSkybox: THREE.Mesh | null = null;
 type MaterialPreset = 'Rubber' | 'Concrete' | 'Glass';
 const objectMaterialPresets = new WeakMap<THREE.Mesh, MaterialPreset>();
@@ -2943,14 +2948,71 @@ function createSunGlow(): THREE.Sprite {
     map: texture,
     color: '#fff0c0',
     transparent: true,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     toneMapped: false,
   }));
   glow.scale.set(4400, 4400, 1);
-  glow.renderOrder = 999;
   glow.frustumCulled = false;
   return glow;
+}
+
+function createSunRays(): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create the sun rays texture.');
+
+  const center = 128;
+  const glow = context.createRadialGradient(center, center, 5, center, center, 128);
+  glow.addColorStop(0, 'rgba(255,244,205,0.45)');
+  glow.addColorStop(0.28, 'rgba(255,226,160,0.18)');
+  glow.addColorStop(1, 'rgba(255,226,160,0)');
+  context.fillStyle = glow;
+  context.fillRect(0, 0, 256, 256);
+
+  context.globalCompositeOperation = 'lighter';
+  for (let index = 0; index < 24; index++) {
+    const angle = (index / 24) * Math.PI * 2;
+    const halfWidth = index % 3 === 0 ? 0.045 : 0.018;
+    const fade = context.createLinearGradient(
+      center + Math.cos(angle) * 20,
+      center + Math.sin(angle) * 20,
+      center + Math.cos(angle) * 128,
+      center + Math.sin(angle) * 128,
+    );
+    fade.addColorStop(0, 'rgba(255,239,190,0)');
+    fade.addColorStop(0.38, 'rgba(255,235,180,0.12)');
+    fade.addColorStop(1, 'rgba(255,225,155,0)');
+    context.beginPath();
+    context.moveTo(
+      center + Math.cos(angle - halfWidth) * 8,
+      center + Math.sin(angle - halfWidth) * 8,
+    );
+    context.lineTo(center + Math.cos(angle) * 128, center + Math.sin(angle) * 128);
+    context.lineTo(
+      center + Math.cos(angle + halfWidth) * 8,
+      center + Math.sin(angle + halfWidth) * 8,
+    );
+    context.closePath();
+    context.fillStyle = fade;
+    context.fill();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const rays = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    color: '#fff0c0',
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+    toneMapped: false,
+  }));
+  rays.scale.set(9000, 9000, 1);
+  rays.visible = sunRaysEnabled;
+  rays.frustumCulled = false;
+  return rays;
 }
 
 function updateSunSize(proxy: THREE.Mesh, settings: SunSettings) {
@@ -2959,6 +3021,7 @@ function updateSunSize(proxy: THREE.Mesh, settings: SunSettings) {
   settings.flare.geometry.dispose();
   settings.flare.geometry = new THREE.TorusGeometry(400 * settings.size, 17.5 * settings.size, 8, 48);
   settings.glow.scale.set(4400 * settings.size, 4400 * settings.size, 1);
+  settings.rays.scale.set(9000 * settings.size, 9000 * settings.size, 1);
 }
 
 function updateAimedLight(proxy: THREE.Mesh) {
@@ -3027,21 +3090,30 @@ function addLight(type: 'spot' | 'directional' | 'point'): THREE.Mesh {
   lightTypeByMesh.set(proxy, type);
   if (light instanceof THREE.DirectionalLight) {
     proxy.frustumCulled = false;
+    proxy.renderOrder = 0;
     proxy.geometry.dispose();
     proxy.geometry = new THREE.SphereGeometry(275, 20, 14);
     material.dispose();
-    proxy.material = new THREE.MeshBasicMaterial({ color: '#ffe188', depthTest: false });
+    proxy.material = new THREE.MeshBasicMaterial({ color: '#ffe188', depthTest: true });
     const flare = new THREE.Mesh(
       new THREE.TorusGeometry(400, 17.5, 8, 48),
-      new THREE.MeshBasicMaterial({ color: '#ffd37a', transparent: true, opacity: 0.75, depthTest: false }),
+      new THREE.MeshBasicMaterial({
+        color: '#ffd37a',
+        transparent: true,
+        opacity: 0.75,
+        depthTest: true,
+        depthWrite: false,
+      }),
     );
     flare.visible = false;
-    flare.renderOrder = 999;
     proxy.add(flare);
     const glow = createSunGlow();
     proxy.add(glow);
-    const settings: SunSettings = { latitude: 35, longitude: 0, timeOfDay: 12, size: 1, flare, glow };
+    const rays = createSunRays();
+    proxy.add(rays);
+    const settings: SunSettings = { latitude: 35, longitude: 0, timeOfDay: 12, size: 1, flare, glow, rays };
     sunSettings.set(proxy, settings);
+    sunMeshes.add(proxy);
     updateSunPosition(proxy, light, settings);
     scene.add(light);
     scene.add(light.target);
@@ -3129,6 +3201,7 @@ function cloneSelectedObject() {
         updateSunSize(clone, cloneSun);
         cloneSun.flare.visible = sourceSun.flare.visible;
         cloneSun.glow.visible = sourceSun.glow.visible;
+        cloneSun.rays.visible = sourceSun.rays.visible;
       }
     }
     cloneLight.color.copy(sourceLight.color);
@@ -3281,6 +3354,7 @@ function deleteSelectedObject() {
     worldSkybox = null;
     clearWorldSkybox(mesh);
   }
+  sunMeshes.delete(mesh);
   sceneContents.querySelector(`.scene-object-row[data-uuid="${mesh.uuid}"]`)?.remove();
   sunSettings.get(mesh)?.flare.geometry.dispose();
   const flare = sunSettings.get(mesh)?.flare;
@@ -3289,6 +3363,11 @@ function deleteSelectedObject() {
   if (glow?.material instanceof THREE.SpriteMaterial) {
     glow.material.map?.dispose();
     glow.material.dispose();
+  }
+  const rays = sunSettings.get(mesh)?.rays;
+  if (rays?.material instanceof THREE.SpriteMaterial) {
+    rays.material.map?.dispose();
+    rays.material.dispose();
   }
   setObjectDisplayMode(mesh, null);
   mesh.geometry.dispose();
@@ -3522,6 +3601,17 @@ lightingMenu.querySelectorAll<HTMLButtonElement>('[data-light]').forEach((button
     insertButton.setAttribute('aria-expanded', 'false');
     addLight(type);
   });
+});
+
+sunRaysButton.addEventListener('click', () => {
+  sunRaysEnabled = !sunRaysEnabled;
+  if (sunRaysEnabled && sunMeshes.size === 0) addLight('directional');
+  sunMeshes.forEach((sun) => {
+    const settings = sunSettings.get(sun);
+    if (settings) settings.rays.visible = sunRaysEnabled;
+  });
+  sunRaysButton.setAttribute('aria-pressed', String(sunRaysEnabled));
+  sunRaysButton.textContent = `Sun Rays: ${sunRaysEnabled ? 'On' : 'Off'}`;
 });
 
 document.addEventListener('pointerdown', (event) => {
