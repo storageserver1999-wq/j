@@ -14,6 +14,7 @@
             <button class="view-button" type="button" aria-expanded="false" aria-controls="view-menu">View</button>
             <div id="view-menu" class="view-menu" hidden>
               <button class="render-menu-button" type="button" aria-expanded="false" aria-controls="render-menu">Render <span aria-hidden="true">›</span></button>
+              <button class="preferences-button" type="button">Preferences…</button>
               <div id="render-menu" class="render-menu" hidden>
                 <button class="grid-toggle-button" type="button" role="switch" aria-checked="true">Hide grid</button>
                 <label class="distance-control" for="render-distance">
@@ -31,20 +32,10 @@
               </div>
             </div>
           </div>
+          <button class="sculpting-button" type="button">Sculpting</button>
           <div class="feature-menu-wrap">
             <button class="feature-button" type="button" aria-expanded="false" aria-controls="feature-menu">Feature</button>
-            <div id="feature-menu" class="feature-menu" hidden>
-              <div class="menu-heading">FEATURES</div>
-              <div class="lighting-menu-wrap">
-                <button class="lighting-button" type="button" aria-expanded="false" aria-controls="lighting-menu">FXlighting <span aria-hidden="true">›</span></button>
-                <div id="lighting-menu" class="lighting-menu" hidden>
-                  <div class="menu-heading">ADD LIGHT</div>
-                  <button type="button" data-light="spot">Spot Light</button>
-                  <button type="button" data-light="directional">Universal Light (Sun)</button>
-                  <button type="button" data-light="point">Point Light</button>
-                </div>
-              </div>
-            </div>
+            <div id="feature-menu" class="feature-menu" hidden></div>
           </div>
         </div>
         <div class="toolbar" role="group" aria-label="Transform tools">
@@ -71,14 +62,15 @@
             </div>
           </div>
           <button class="display-mode-button" type="button" data-display-mode="wireframe" aria-label="Wireframe" aria-pressed="false" title="Toggle wireframe for the selected object. Right-click to show all.">
-            <img src="./wireframe-icon.png" alt="" aria-hidden="true" />
+            <img src="./wireframe-icon-21.png" alt="" aria-hidden="true" />
           </button>
           <button class="display-mode-button" type="button" data-display-mode="faces" aria-label="Faces" aria-pressed="false" title="Show triangle outlines on the selected object. Right-click to show all.">
             <img src="./faces-icon.png" alt="" aria-hidden="true" />
           </button>
         </div>
         <div class="viewport-wrap">
-          <div id="viewport" class="viewport" aria-label="3D viewport"></div>
+          <div id="viewport" class="viewport" aria-label="3D viewport. Hold the left mouse button to orbit, or middle mouse to box-select blocks. Press backtick for free camera, hold right mouse to look, use WASD to move, and Space/C to move vertically." title="Hold left mouse to orbit or middle mouse to draw a selection box around blocks. Press ` for free camera; hold right mouse to look, use W/S to move forward/backward in the view direction, A/D to strafe, and Space/C to move vertically."></div>
+          <div id="selection-box" class="selection-box" hidden aria-hidden="true"></div>
         </div>
         <div class="pbr-dock-resize" role="separator" aria-orientation="horizontal" aria-label="Resize PBR texture panel" aria-valuemin="96" aria-valuemax="420" aria-valuenow="160" tabindex="0"></div>
         <section class="pbr-dock" aria-label="Texture tree">
@@ -88,6 +80,44 @@
           </header>
           <div class="pbr-dock-content">
             <div class="pbr-dock-placeholder">PBR texture workspace</div>
+          </div>
+        </section>
+        <section id="preferences-panel" class="preferences-panel" role="dialog" aria-labelledby="preferences-title" hidden>
+          <header class="preferences-header">
+            <div class="preferences-title-group">
+              <h2 id="preferences-title">Preferences</h2>
+              <span>ENGINE SETTINGS</span>
+            </div>
+            <button class="preferences-close" type="button" aria-label="Close preferences">×</button>
+          </header>
+          <div class="preferences-window-body">
+            <nav class="preferences-nav" aria-label="Preference categories">
+              <button class="preferences-nav-button active" type="button" data-preferences-tab="general" aria-selected="true">General</button>
+              <button class="preferences-nav-button" type="button" data-preferences-tab="uhd" aria-selected="false">UHD</button>
+            </nav>
+            <div class="preferences-content">
+              <section class="preferences-page" data-preferences-page="general">
+                <h3>Rendering</h3>
+                <label class="preferences-field" for="lighting-technology">
+                  <span>Lighting technology</span>
+                  <select id="lighting-technology" aria-label="Lighting technology">
+                    <option value="mlight" selected>Mlight · Real-time rasterization</option>
+                    <option value="path-tracing" disabled>RTX / Path Tracing · Unavailable</option>
+                  </select>
+                </label>
+                <h3>Configurations</h3>
+                <label class="preferences-check"><input id="auto-open-model" type="checkbox" /><span>Open Model controls automatically</span></label>
+                <label class="preferences-check"><input id="auto-open-chromatics" type="checkbox" /><span>Open Chromatics controls automatically</span></label>
+              </section>
+              <section class="preferences-page" data-preferences-page="uhd" hidden>
+                <h3>Interface colors</h3>
+                <p class="preferences-description">Adjust the engine’s dark interface colors.</p>
+                <label class="preferences-color-field" for="ui-accent-color"><span>Accent</span><input id="ui-accent-color" type="color" value="#74c5ed" /></label>
+                <label class="preferences-color-field" for="ui-background-color"><span>UI background</span><input id="ui-background-color" type="color" value="#101214" /></label>
+                <label class="preferences-color-field" for="ui-panel-color"><span>Panel surface</span><input id="ui-panel-color" type="color" value="#191d20" /></label>
+                <button id="reset-ui-colors" class="preferences-reset-button" type="button">Reset colors</button>
+              </section>
+            </div>
           </div>
         </section>
         <button class="debug-button" type="button" aria-expanded="false" aria-controls="debug-panel" aria-label="Open error log" title="Error log">
@@ -122,6 +152,15 @@
                 <button class="world-insert-button" type="button" aria-expanded="false" aria-controls="world-insert-menu">Insert</button>
                 <div id="world-insert-menu" class="world-insert-menu" hidden>
                   <div class="menu-heading">ADD TO WORLD</div>
+                  <div class="lighting-menu-wrap">
+                    <button class="lighting-button" type="button" aria-expanded="false" aria-controls="lighting-menu">FX Lighting <span aria-hidden="true">›</span></button>
+                    <div id="lighting-menu" class="lighting-menu" hidden>
+                      <div class="menu-heading">ADD LIGHT</div>
+                      <button type="button" data-light="spot">Spot Light</button>
+                      <button type="button" data-light="directional">Universal Light (Sun)</button>
+                      <button type="button" data-light="point">Point Light</button>
+                    </div>
+                  </div>
                   <button class="world-skybox-insert" type="button">World Skybox</button>
                 </div>
               </div>
