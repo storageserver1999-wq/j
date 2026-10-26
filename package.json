@@ -1,7 +1,9 @@
 {
-  "name": "propeller-engine",
+  "name": "propeller-engine-vbolt",
+  "description": "Propeller Engine Vbolt desktop editor",
+  "author": "Propeller Engine Vbolt",
   "private": true,
-  "version": "2.7.1",
+  "version": "2.7.2",
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -22,8 +24,9 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.propellerengine.editor",
-    "productName": "Propeller Engine",
+    "appId": "com.propellerengine.vbolt",
+    "productName": "Propeller Engine Vbolt",
+    "artifactName": "${productName} ${version}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -53,7 +56,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Propeller Engine"
+      "shortcutName": "Propeller Engine Vbolt"
     }
   }
 }
