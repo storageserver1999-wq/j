@@ -29,6 +29,10 @@ function makeSkyboxMaterial(color = '#000000'): THREE.MeshBasicMaterial {
     side: THREE.BackSide,
     depthWrite: false,
     toneMapped: false,
+    // Atmosphere fog shapes the scene, not the sky itself; fogging a skybox
+    // that sits tens of thousands of units away would simply replace it with
+    // a flat fog colour.
+    fog: false,
   });
 }
 

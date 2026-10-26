@@ -3,32 +3,84 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#181818" />
+    <meta name="theme-color" content="#050505" />
     <title>Propeller Engine</title>
   </head>
-  <body>
+  <body oncontextmenu="return false">
     <main class="workspace">
+      <aside class="sidebar sidebar-left" aria-label="Scene explorer">
+        <section class="panel hierarchy-panel">
+          <header class="scene-explorer-header">
+            <h2>Scene Explorer</h2>
+            <div class="scene-explorer-actions">
+              <div class="insert-menu-wrap">
+                <button class="insert-button" type="button" aria-expanded="false" aria-controls="insert-menu">Shapes</button>
+                <div id="insert-menu" class="insert-menu" hidden>
+                  <div class="menu-heading">ADD SHAPE</div>
+                  <button type="button" data-shape="Cube">Cube</button>
+                  <button type="button" data-shape="Sphere">Sphere</button>
+                  <button type="button" data-shape="Cylinder">Cylinder</button>
+                  <button type="button" data-shape="Cone">Cone</button>
+                  <button type="button" data-shape="Torus">Torus</button>
+                  <button type="button" data-shape="Pill">Pill</button>
+                  <button type="button" data-shape="ImageBlock">Image Block</button>
+                </div>
+              </div>
+              <div class="world-insert-wrap">
+                <button class="world-insert-button" type="button" aria-expanded="false" aria-controls="world-insert-menu">Insert</button>
+                <div id="world-insert-menu" class="world-insert-menu" hidden>
+                  <input id="insert-search" class="insert-search" type="search" placeholder="Search objects…" aria-label="Search insert objects" autocomplete="off" spellcheck="false" />
+                  <div class="insert-items">
+                    <button type="button" data-light="spot">Spot Light</button>
+                    <button type="button" data-light="directional">Universal Light (Sun)</button>
+                    <button type="button" data-light="point">Point Light</button>
+                    <button class="sun-rays-button" type="button" aria-pressed="false" title="Attach a screen-space God Rays effect to the sun">God Rays: Off</button>
+                    <button class="shadows-settings-insert" type="button">Shadows</button>
+                    <button class="atmosphere-settings-insert" type="button">Atmosphere</button>
+                    <button class="monitor-settings-insert" type="button"><img class="insert-item-icon" src="./monitor-icon.png" alt="" aria-hidden="true" />Monitor</button>
+                    <button class="camera-insert-button" type="button" title="Spawn a camera you can move around; play from it to see what it sees.">Camera</button>
+                    <button class="world-skybox-insert" type="button">World Skybox</button>
+                  </div>
+                  <p class="insert-empty" hidden>No matching objects.</p>
+                </div>
+              </div>
+            </div>
+          </header>
+          <button class="scene-root" type="button" aria-expanded="true" aria-controls="scene-contents">
+            <span class="chevron" aria-hidden="true">⌄</span>
+            <span>Scene</span>
+          </button>
+          <div id="scene-contents" class="scene-contents"></div>
+        </section>
+      </aside>
+      <div class="sidebar-resize sidebar-resize-left" role="separator" aria-orientation="vertical" aria-label="Resize scene explorer" tabindex="0"></div>
       <section class="editor" aria-label="Propeller Engine">
         <div class="editor-topbar" role="group" aria-label="Scene display tools">
           <div class="view-menu-wrap">
             <button class="view-button" type="button" aria-expanded="false" aria-controls="view-menu">View</button>
             <div id="view-menu" class="view-menu" hidden>
+              <label class="distance-control" for="render-distance">
+                <span>Grid distance</span>
+                <span><output id="render-distance-value">30</output> m</span>
+                <input id="render-distance" type="range" min="0" max="6" step="1" value="3" list="render-distance-steps" />
+                <datalist id="render-distance-steps">
+                  <option value="0" label="5"></option>
+                  <option value="1" label="10"></option>
+                  <option value="2" label="20"></option>
+                  <option value="3" label="30"></option>
+                  <option value="4" label="50"></option>
+                  <option value="5" label="100"></option>
+                  <option value="6" label="250"></option>
+                </datalist>
+              </label>
               <button class="render-menu-button" type="button" aria-expanded="false" aria-controls="render-menu">Render <span aria-hidden="true">›</span></button>
+              <button class="pbr-menu-button" type="button" aria-expanded="false" aria-controls="pbr-menu">PBR <span aria-hidden="true">›</span></button>
               <button class="preferences-button" type="button">Preferences…</button>
               <div id="render-menu" class="render-menu" hidden>
                 <button class="grid-toggle-button" type="button" role="switch" aria-checked="true">Hide grid</button>
-                <label class="distance-control" for="render-distance">
-                  <span>Grid distance</span>
-                  <span><output id="render-distance-value">20</output> m</span>
-                  <input id="render-distance" type="range" min="0" max="4" step="1" value="2" list="render-distance-steps" />
-                  <datalist id="render-distance-steps">
-                    <option value="0" label="4"></option>
-                    <option value="1" label="10"></option>
-                    <option value="2" label="20"></option>
-                    <option value="3" label="30"></option>
-                    <option value="4" label="40"></option>
-                  </datalist>
-                </label>
+              </div>
+              <div id="pbr-menu" class="render-menu pbr-menu" hidden>
+                <button class="pbr-dock-toggle" type="button" role="switch" aria-checked="true">PBR workspace</button>
               </div>
             </div>
           </div>
@@ -48,6 +100,9 @@
           </button>
           <button class="tool-button tool-icon-button" type="button" data-mode="scale" aria-label="Scale" aria-pressed="false" title="Scale">
             <img src="./scale-icon.png" alt="" aria-hidden="true" />
+          </button>
+          <button class="play-button" type="button" aria-label="Play camera view" title="Play from a Camera object">
+            <img src="./play-icon.png" alt="" aria-hidden="true" />
           </button>
           <button class="add-geometry-point-button" type="button" hidden>Add Point</button>
           <div class="toolbar-spacer" aria-hidden="true"></div>
@@ -71,16 +126,38 @@
         <div class="viewport-wrap">
           <div id="viewport" class="viewport" aria-label="3D viewport. Hold the left mouse button to orbit, or middle mouse to box-select blocks. Press backtick for free camera, hold right mouse to look, use WASD to move, and Space/C to move vertically." title="Hold left mouse to orbit or middle mouse to draw a selection box around blocks. Press ` for free camera; hold right mouse to look, use W/S to move forward/backward in the view direction, A/D to strafe, and Space/C to move vertically."></div>
           <div id="selection-box" class="selection-box" hidden aria-hidden="true"></div>
-        </div>
-        <div class="pbr-dock-resize" role="separator" aria-orientation="horizontal" aria-label="Resize PBR texture panel" aria-valuemin="96" aria-valuemax="420" aria-valuenow="160" tabindex="0"></div>
-        <section class="pbr-dock" aria-label="Texture tree">
-          <header class="pbr-dock-header">
-            <h2>TEXTURE TREE</h2>
-            <span>Workspace</span>
-          </header>
-          <div class="pbr-dock-content">
-            <div class="pbr-dock-placeholder">PBR texture workspace</div>
+          <div class="view-gizmo" title="Click an axis to look from that side. Click the centre dot to return to the starting view.">
+            <canvas id="view-gizmo-canvas" aria-label="View orientation"></canvas>
           </div>
+        </div>
+        <div class="pbr-dock-resize" role="separator" aria-orientation="horizontal" aria-label="Resize PBR texture panel" aria-valuemin="120" aria-valuemax="420" aria-valuenow="160" tabindex="0"></div>
+        <section class="pbr-dock" aria-label="PBR texture workspace">
+          <header class="pbr-dock-header">
+            <h2>PBR WORKSPACE</h2>
+            <div class="workspace-actions">
+              <span class="pbr-texture-name">No texture selected</span>
+              <button class="workspace-add-button" type="button" aria-label="Add texture" aria-expanded="false" aria-controls="workspace-add-menu" title="Add texture">+</button>
+              <button class="workspace-close-button" type="button" aria-label="Hide PBR workspace" title="Hide PBR workspace">×</button>
+            </div>
+            <div id="workspace-add-menu" class="workspace-add-menu" role="menu" hidden>
+              <button type="button" role="menuitem" data-texture-source="file">Add texture…</button>
+              <button type="button" role="menuitem" data-texture-source="checker">Checkerboard</button>
+              <button type="button" role="menuitem" data-texture-source="uvGrid">UV grid</button>
+              <button type="button" role="menuitem" class="workspace-add-model" data-texture-source="model">Import 3D model…</button>
+            </div>
+          </header>
+          <div class="workspace-tabs" role="tablist" aria-label="Open textures" hidden></div>
+          <div class="pbr-dock-content">
+            <div class="texture-viewport">
+              <div class="texture-grid-wrap">
+                <div class="texture-grid" role="listbox" aria-label="Textures"></div>
+              </div>
+              <canvas id="pbr-workspace-canvas" aria-hidden="true"></canvas>
+              <p class="workspace-empty">No textures yet — use + to add one.</p>
+            </div>
+          </div>
+          <input id="workspace-file-input" class="texture-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/avif" multiple hidden />
+          <input id="model-file-input" class="texture-file-input" type="file" accept=".glb,.gltf,.obj,.fbx,.stl,.ply,.3ds,.dae,.mtl,.bin,.tga,.targa,.bmp,image/png,image/jpeg,image/webp,image/avif" multiple hidden />
         </section>
         <section id="preferences-panel" class="preferences-panel" role="dialog" aria-labelledby="preferences-title" hidden>
           <header class="preferences-header">
@@ -102,9 +179,18 @@
                   <span>Lighting technology</span>
                   <select id="lighting-technology" aria-label="Lighting technology">
                     <option value="mlight" selected>Mlight · Real-time rasterization</option>
-                    <option value="path-tracing" disabled>RTX / Path Tracing · Unavailable</option>
+                    <option value="ray-traced">Mlight RT · Ray-traced lighting</option>
                   </select>
                 </label>
+                <label class="preferences-field" id="ray-tracing-quality-field" for="ray-tracing-quality" hidden>
+                  <span>Ray tracing quality</span>
+                  <select id="ray-tracing-quality" aria-label="Ray tracing quality">
+                    <option value="low">Low · 1 light</option>
+                    <option value="medium" selected>Medium · 2 lights</option>
+                    <option value="high">High · 3 lights</option>
+                  </select>
+                </label>
+                <p class="preferences-description" id="ray-tracing-note" hidden>Screen-space traced shadows for directional, spot and point lights. WebGPU exposes no hardware ray tracing, so rays are traced against the scene depth buffer.</p>
                 <h3>Configurations</h3>
                 <label class="preferences-check"><input id="auto-open-model" type="checkbox" /><span>Open Model controls automatically</span></label>
                 <label class="preferences-check"><input id="auto-open-chromatics" type="checkbox" /><span>Open Chromatics controls automatically</span></label>
@@ -112,14 +198,15 @@
               <section class="preferences-page" data-preferences-page="uhd" hidden>
                 <h3>Interface colors</h3>
                 <p class="preferences-description">Adjust the engine’s dark interface colors.</p>
-                <label class="preferences-color-field" for="ui-accent-color"><span>Accent</span><input id="ui-accent-color" type="color" value="#74c5ed" /></label>
-                <label class="preferences-color-field" for="ui-background-color"><span>UI background</span><input id="ui-background-color" type="color" value="#101214" /></label>
-                <label class="preferences-color-field" for="ui-panel-color"><span>Panel surface</span><input id="ui-panel-color" type="color" value="#191d20" /></label>
+                <label class="preferences-color-field" for="ui-accent-color"><span>Accent</span><input id="ui-accent-color" type="color" value="#d9dde0" /></label>
+                <label class="preferences-color-field" for="ui-background-color"><span>UI background</span><input id="ui-background-color" type="color" value="#050505" /></label>
+                <label class="preferences-color-field" for="ui-panel-color"><span>Panel surface</span><input id="ui-panel-color" type="color" value="#0a0a0a" /></label>
                 <button id="reset-ui-colors" class="preferences-reset-button" type="button">Reset colors</button>
               </section>
             </div>
           </div>
         </section>
+        <button class="play-stop-button" type="button" hidden>STOP</button>
         <button class="debug-button" type="button" aria-expanded="false" aria-controls="debug-panel" aria-label="Open error log" title="Error log">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 5h6v6H5zM7 2v3M9 2v3M2 7h3M11 7h3M2 10h3M11 10h3M5 11l-2 3M11 11l2 3M5 7V5l2-2h2l2 2v2"/></svg>
         </button>
@@ -130,50 +217,8 @@
         </section>
       </section>
 
-      <div class="sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize scene panels" tabindex="0"></div>
-      <aside class="sidebar" aria-label="Scene panels">
-        <section class="panel hierarchy-panel">
-          <header class="scene-explorer-header">
-            <h2>Scene Explorer</h2>
-            <div class="scene-explorer-actions">
-              <div class="insert-menu-wrap">
-                <button class="insert-button" type="button" aria-expanded="false" aria-controls="insert-menu">Shapes</button>
-                <div id="insert-menu" class="insert-menu" hidden>
-                  <div class="menu-heading">ADD SHAPE</div>
-                  <button type="button" data-shape="Cube">Cube</button>
-                  <button type="button" data-shape="Sphere">Sphere</button>
-                  <button type="button" data-shape="Cylinder">Cylinder</button>
-                  <button type="button" data-shape="Cone">Cone</button>
-                  <button type="button" data-shape="Torus">Torus</button>
-                  <button type="button" data-shape="Pill">Pill</button>
-                </div>
-              </div>
-              <div class="world-insert-wrap">
-                <button class="world-insert-button" type="button" aria-expanded="false" aria-controls="world-insert-menu">Insert</button>
-                <div id="world-insert-menu" class="world-insert-menu" hidden>
-                  <div class="menu-heading">ADD TO WORLD</div>
-                  <div class="lighting-menu-wrap">
-                    <button class="lighting-button" type="button" aria-expanded="false" aria-controls="lighting-menu">FX Lighting <span aria-hidden="true">›</span></button>
-                    <div id="lighting-menu" class="lighting-menu" hidden>
-                      <div class="menu-heading">ADD LIGHT</div>
-                      <button type="button" data-light="spot">Spot Light</button>
-                      <button type="button" data-light="directional">Universal Light (Sun)</button>
-                      <button type="button" data-light="point">Point Light</button>
-                      <button class="sun-rays-button" type="button" aria-pressed="false">Sun Rays: Off</button>
-                    </div>
-                  </div>
-                  <button class="world-skybox-insert" type="button">World Skybox</button>
-                </div>
-              </div>
-            </div>
-          </header>
-          <button class="scene-root" type="button" aria-expanded="true" aria-controls="scene-contents">
-            <span class="chevron" aria-hidden="true">⌄</span>
-            <span>Scene</span>
-          </button>
-          <div id="scene-contents" class="scene-contents"></div>
-        </section>
-        <div class="panel-resize" role="separator" aria-orientation="horizontal" aria-label="Resize Hierarchy and Properties panels" tabindex="0"></div>
+      <div class="sidebar-resize sidebar-resize-right" role="separator" aria-orientation="vertical" aria-label="Resize configurations" tabindex="0"></div>
+      <aside class="sidebar sidebar-right" aria-label="Configurations">
         <section class="panel properties-panel">
           <h2>Configurations</h2>
           <div class="properties-empty" aria-live="polite">Nothing selected</div>
@@ -182,11 +227,13 @@
     </main>
     <div id="object-context-menu" class="object-context-menu" role="menu" aria-label="Object actions" hidden>
       <button type="button" role="menuitem" data-action="lock"></button>
-      <button type="button" role="menuitem" data-action="group-children">Group child blocks</button>
-      <button type="button" role="menuitem" data-action="model-children">Model children into one mesh</button>
+      <button type="button" role="menuitem" data-action="group-children">Group children</button>
+      <button type="button" role="menuitem" data-action="ungroup">Ungroup</button>
+      <button type="button" role="menuitem" data-action="ungroup-all">Ungroup all levels</button>
+      <button type="button" role="menuitem" data-action="model-children">Merge children</button>
       <button type="button" role="menuitem" data-action="show-all-wireframe">Show all objects in wireframe</button>
       <button type="button" role="menuitem" data-action="show-all-faces">Show all object triangle outlines</button>
-      <button type="button" role="menuitem" data-action="delete">Delete</button>
+      <button type="button" role="menuitem" class="context-menu-danger" data-action="delete">Delete</button>
     </div>
     <div id="custom-cursor" aria-hidden="true">
       <svg class="propeller-cursor" viewBox="0 0 16 16" shape-rendering="crispEdges">
